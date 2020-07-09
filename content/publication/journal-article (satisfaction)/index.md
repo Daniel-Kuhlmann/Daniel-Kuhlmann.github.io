@@ -1,5 +1,5 @@
 ---
-title: "Coveting your neighbour’s house: understanding the positional nature of residential satisfaction"
+title: "Coveting your neighbour's house: understanding the positional nature of residential satisfaction"
 authors:
 - admin
 date: "2019-08-01T00:00:00Z"
@@ -45,9 +45,9 @@ tags:
 featured: true
 
 # links:
-# - name: ""
-#   url: ""
-url_pdf: https://www.tandfonline.com/doi/full/10.1080/02673037.2019.1651832
+ - name: "Online"
+  url: https://www.tandfonline.com/doi/full/10.1080/02673037.2019.1651832
+url_pdf: ''
 url_code: ''
 url_dataset: ''
 url_poster: ''
