@@ -1,5 +1,5 @@
 ---
-title: "Working Paper -- Building up After Tearing Down: The Impact of Demolitions on Residential Investment"
+title: "Working Paper -- Fixing up After Tearing Down: The Impact of Demolitions on Residential Investment"
 authors:
 - admin
 date: "2019-04-07T00:00:00Z"
