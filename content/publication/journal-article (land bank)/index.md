@@ -15,12 +15,10 @@ publishDate: "2017-01-01T00:00:00Z"
 publication_types: ["2"]
 
 # Publication name and optional abbreviated publication name.
-publication: "Urban Affiars Review"
+publication: "Journal of Planning Education and Research"
 publication_short: ""
 
 abstract: "Does the presence of deteriorating housing affect nearby property owner's decision to maintain their units? Does demolishing these distressed houses increase nearby homeowner's maintenance investment? In this paper, I examine these questions by testing whether exposure to targeted demolitions of abandoned and distressed housing affects changes in the external condition of nearby houses. Using two waves of a property inventory in Cleveland, Ohio, my models suggest that, compared with a control group of houses located near vacant housing, proximity to demolitions decreases the likelihood that a property's condition deteriorated between 2015 and 2018 and increases the likelihood that it improved." 
-
-
 
 
 # Summary. An optional shortened abstract.
