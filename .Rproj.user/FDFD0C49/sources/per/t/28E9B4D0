@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1597593479476.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "3932890729",
+    "id" : "28E9B4D0",
+    "lastKnownWriteTime" : 1597600090,
+    "last_content_update" : 1597600090053,
+    "path" : "C:/Users/dok/Desktop/suburbs.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "79,14",
+        "scrollLine" : "61",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

@@ -1,0 +1,109 @@
+## Preliminaries
+rm(list=ls())
+
+## This function will check if a package is installed, and if not, install it
+pkgTest <- function(x) {
+  if (!require(x, character.only = TRUE))
+  {
+    install.packages(x, dep = TRUE)
+    if(!require(x, character.only = TRUE)) stop("Package not found")
+  }
+}
+
+dir <- "//iastate.edu/lss/research/dok-lab/Section 502/data"
+
+## These lines load the required packages
+packages <- c("readxl", 
+              "data.table", 
+              "janitor", 
+              "tidyverse", 
+              "lubridate", 
+              "stringr", 
+              "purrr", 
+              "tidycensus", 
+              "sf", 
+              "leaflet", 
+              "knitr", 
+              "nngeo", 
+              "extrafont", 
+              "skimr", 
+              "scales",
+              "lme4",
+              "mapview", 
+              "pryr", 
+              "tidylog",
+              "margins", 
+              "ggmap", 
+              "furrr", 
+              "tigris", 
+              "mapview", 
+              "units")
+
+lapply(packages, pkgTest)
+
+future::plan(multiprocess)
+
+us <- unique(fips_codes$state)[1:51]
+
+places <- reduce(
+  future_map(us, function(x) {
+  places(x) %>%  
+  st_as_sf()
+  }), 
+  rbind
+)
+
+tracts <- reduce(
+  map(us, function(x) {
+    tracts(x) %>%  
+      st_as_sf()
+  }), 
+  rbind
+)
+
+clipped <- tracts %>%  
+  st_intersection(places) %>%  
+  mutate(joined_area = st_area(.)) %>%  
+  st_drop_geometry() %>% 
+  mutate(pct_area = joined_area / tract_area) %>%  
+  drop_units() %>% 
+  mutate(pct_area = round(pct_area, 5)) %>% 
+  rename(GEOID_TRACT = GEOID, 
+         GEOID_PLACE = GEOID.1, 
+         PLACENAME = NAME.1) %>%  
+  select(GEOID_TRACT, GEOID_PLACE, PLACENAME, pct_area)
+  
+upsai <- read.csv("C:/Users/dok/Desktop/UPSAI_050820.csv") %>%  
+  rename(GEOID_TRACT = GEOID) %>%  
+  mutate(GEOID_TRACT = as.character(GEOID_TRACT))
+
+suburbanplaces <- clipped %>%  
+  left_join(upsai, by = "GEOID_TRACT") %>% 
+  mutate(urban = round((ACS17_Occupied_Housing_Units_Est * UPSAI_urban * pct_area), 0), 
+         suburban = round((ACS17_Occupied_Housing_Units_Est * UPSAI_suburban * pct_area), 0), 
+         rural = round((ACS17_Occupied_Housing_Units_Est * UPSAI_rural * pct_area), 0)) %>%  
+  group_by(GEOID_PLACE, PLACENAME) %>%  
+  summarise(urban = sum(urban, na.rm = T), 
+            suburban = sum(suburban, na.rm = T), 
+            rural = sum(rural, na.rm = T)) %>%  
+  ungroup() %>%  
+  mutate(total = urban + suburban + rural, 
+         pct_urban = urban/total, 
+         pct_suburban = suburban/total, 
+         pct_rural = rural/total) %>%  
+  filter(pct_suburban > .6) %>%  
+  select(GEOID_PLACE, pct_suburban, PLACENAME) %>%  
+  rename(GEOID = GEOID_PLACE)
+
+burbsinmn <- temp %>%  
+  filter(pct_suburban > .6) %>%  
+  select(GEOID_PLACE, pct_suburban, PLACENAME) %>%  
+  rename(GEOID = GEOID_PLACE)
+
+
+mn_place_burbs <- mn_place %>%  
+  left_join(burbsinmn, by = "GEOID") %>%  
+  filter(!is.na(PLACENAME))
+
+
+mapview(mn_place_burbs)

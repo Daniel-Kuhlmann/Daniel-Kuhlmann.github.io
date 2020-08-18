@@ -1,0 +1,372 @@
+## Preliminaries
+rm(list=ls())
+
+## This function will check if a package is installed, and if not, install it
+pkgTest <- function(x) {
+  if (!require(x, character.only = TRUE))
+  {
+    install.packages(x, dep = TRUE)
+    if(!require(x, character.only = TRUE)) stop("Package not found")
+  }
+}
+
+dir <- "//iastate.edu/lss/research/dok-lab/Section 502/data"
+
+## These lines load the required packages
+packages <- c("readxl", 
+              "data.table", 
+              "janitor", 
+              "tidyverse", 
+              "lubridate", 
+              "stringr", 
+              "purrr", 
+              "tidycensus", 
+              "sf", 
+              "leaflet", 
+              "knitr", 
+              "nngeo", 
+              "extrafont", 
+              "skimr", 
+              "scales",
+              "lme4",
+              "mapview", 
+              "pryr", 
+              "tidylog",
+              "margins", 
+              "ggmap", 
+              "furrr")
+
+lapply(packages, pkgTest)
+
+# First, set the variables to keep from the HMDA Extract
+variables.to.keep <- c("state_code",
+                       "county_code",
+                       "census_tract",
+                       "derived_msa_md",
+                       "derived_loan_product_type", 
+                       "derived_dwelling_category", 
+                       "conforming_loan_limit",
+                       "derived_ethnicity",
+                       "derived_race",
+                       "derived_sex",
+                       "action_taken",
+                       "loan_type",
+                       "loan_purpose", 
+                       "loan_amount",
+                       "loan_to_value_ratio", 
+                       "interest_rate", 
+                       "rate_spread",
+                       "hoepa_status", 
+                       "total_loan_costs",
+                       "origination_charges",
+                       "discount_points", 
+                       "loan_term", 
+                       "property_value",
+                       "occupancy_type",
+                       "income",
+                       "debt_to_income_ratio",
+                       "applicant_age", 
+                       "applicant_age_above_62",
+                       "ffiec_msa_md_median_family_income")
+
+acs_variables <- c("B25003_001", # Total Unit 
+                   "B25003_002", # Owner-Occupied
+                   "B25003_003", # Renter-Occupied
+                   "B06011_001", # Median Income in the Past 12 Months
+                   "B05002_001", # Population Nativity Status
+                   "B05002_013", # Foreign Born 
+                   "B03002_001", # Total Pop for Race
+                   "B03002_002", # White, Non-Hispanic
+                   "B03002_012", # Hispanic
+                   "B17001_001", # Total (Poverty)
+                   "B17001_002", # Income Below Poverty Line
+                   "B23025_002", # In labor force
+                   "B23025_004", # Employed 
+                   "B23025_005") # Unemployed 
+
+
+# Creates a vector of all 50 state abbreviations. I need this to pull the census tract boundaries from tidy census
+us <- unique(fips_codes$state)[1:51]
+
+tracts <- reduce(
+  map(us, function(y) {
+    get_decennial(geography = "tract", state = y, variables = "H011I002", year = 2010, geometry = T) %>% 
+      mutate(temp = NAME) %>% 
+      separate(
+        NAME,
+        into = c("tract", "county", "state"),
+        sep = ", ",
+        convert = TRUE
+      ) %>% 
+      mutate(state = y,
+             tract_state = as.factor(y),
+             GEOID_tract = GEOID, 
+             year = 2010,
+             tract = str_remove(tract, "Census Tract "),
+             tract = str_remove(tract, "\\."), 
+             tract = as.numeric(tract)) %>% 
+      select(GEOID_tract, county, state, tract, year, tract_state)      
+  }),
+  rbind
+) %>% 
+  st_transform(crs = 3857)
+
+# Pulls the eligability boundary shape file
+usda_boundaries <- st_read(file.path(dir, "usda boundaries/SFH_MFH_Ineligible.shp")) %>% 
+  st_transform(crs = 3857)
+
+area_within_usda <- reduce(
+  map(us, function(y) {
+    tracts %>% 
+      filter(state == y) %>% 
+      st_intersection(st_buffer(usda_boundaries, 0 )) %>% 
+      mutate(area_usda = as.numeric(st_area(.)) / 1000) %>%  # does the area calcuculation in 1000s of square meters. 
+      group_by(GEOID_tract) %>% 
+      summarise(area_usda = as.numeric(sum(area_usda))) %>% 
+      st_drop_geometry()
+    }),
+    rbind
+  ) 
+
+area <- tracts %>% 
+  mutate(area = as.numeric(st_area(.)) / 1000) %>% 
+  st_drop_geometry() %>% 
+  select(GEOID_tract, area)
+
+pct_within_usda <- area %>% 
+  left_join(area_within_usda, by = "GEOID_tract") %>% 
+  mutate(area_usda = replace_na(area_usda, 0),
+        pct_within_usda = area_usda / area, 
+        geoid = GEOID_tract)
+
+
+# This pulls the acs variables 
+acs <- reduce(
+  map(us, function(x) {
+    get_acs(geography = "tract", variables = acs_variables,
+            state = x, geometry = F) %>% 
+      mutate(state = x)
+  }), 
+  rbind
+) %>% 
+  select(-c("moe", "NAME")) %>% 
+  spread(key = variable, value = estimate) %>% 
+  rename(pop_total = B03002_001,
+         pop_nonhisp_white = B03002_002,
+         pop_hispanic = B03002_012,
+         pop_nativity_total = B05002_001, 
+         pop_foreignborn = B05002_013,
+         units_total  = B25003_001,
+         units_owner  = B25003_002,
+         units_renter = B25003_003,
+         poverty_total = B17001_001,
+         poverty_below = B17001_002,
+         median_income = B06011_001, 
+         employ_laborforce = B23025_002,
+         employ_employed = B23025_004,
+         employ_unemployed = B23025_005, 
+         geoid = GEOID) %>% 
+  mutate(pct_renter = units_renter/ units_total, 
+         pct_white = pop_nonhisp_white / pop_total,
+         pct_owner = units_owner / units_total, 
+         pct_employed = employ_employed / employ_laborforce, 
+         pct_hispanic = (pop_hispanic / pop_total), 
+         pct_foreign = pop_foreignborn / pop_nativity_total, 
+         pct_poverty = poverty_below / poverty_total, 
+         geoid = as.numeric(geoid)) 
+
+# This creates a centroid for each tract. 
+centroid <-  tracts %>% 
+  st_centroid() %>% 
+  group_by(state) %>% 
+  mutate(temp_id = row_number()) %>% 
+  ungroup()
+
+# This finds the nearest usda ineligible boundary 
+# and calculates the distance in meters and kilometers. 
+# I have to do the temp_id thing becuase it doesn't keep any 
+# any of the id fields. The temp_id allows me to match back 
+# with the centroid file and add back the geoid. 
+# This takes forever to run. Don't rerun it unless 
+# I absolutely have to
+tract_distance_temp <- reduce(
+  map(us, function(y) {
+    centroid %>% 
+      filter(state == y) %>% 
+      st_nn(usda_boundaries, sparse = TRUE, returnDist = T) %>%
+      as_tibble() %>% 
+      rename(tract_distance_boundary = dist) %>% 
+      mutate(temp_id = row_number(), 
+             tract_distance_boundary_km = tract_distance_boundary / 1000, 
+             state = y)
+  }),
+  rbind
+)  
+
+tract_distance <- centroid %>% 
+  select(temp_id, GEOID_tract, state) %>% 
+  left_join(tract_distance_temp, by = c("temp_id", "state")) %>% 
+  select(-temp_id)
+
+# rm(tract_distance_temp)
+
+# This merges all the usda relational measures. 
+relation_to_usda <- tract_distance %>% 
+  left_join(area, by = "GEOID_tract") %>% 
+  left_join(area_within_usda, "GEOID_tract") %>% 
+  mutate(area_usda = replace_na(area_usda, 0),
+         pct_within_usda = area_usda / area, 
+         geoid = as.numeric(GEOID_tract)) %>%
+  select(-GEOID_tract)
+
+saveRDS(relation_to_usda, file.path(dir, "working data/relation_to_usda.rds"))
+
+relation_to_usda <- readRDS(file.path(dir, "working data/relation_to_usda.rds")) %>%  
+  st_drop_geometry() %>%  
+  select(-nn)
+
+# This pulls and formats the hmda data and merges it with the 
+# tract-USDA boundary relation data. 
+hmda_18 <- read.table(file.path(dir, "HMDA/2018_lar.txt"), 
+                      header = T, 
+                     # nrows = 1000000, # Comment this out when everything is running correctly
+                      sep = "|") %>%   
+  select(variables.to.keep) %>% 
+  filter(!is.na(census_tract)) %>%  
+  mutate(originated = ifelse(action_taken == 1, 1, 0),
+         approved = ifelse(action_taken == 1 | action_taken == 2, 1, 0), 
+         denied = ifelse(action_taken == 3, 1, 0),
+         homepurchase = ifelse(loan_purpose == 1, 1, 0),
+         usda_insured = ifelse(loan_type == 4 & originated == 1, 1, 0),
+         va_insured = ifelse(loan_type == 2 & originated == 1, 1, 0),
+         fha_insured = ifelse(loan_type == 2 & originated == 1, 1, 0),
+         male_borrower = ifelse(derived_sex == "Male", 1, 0), 
+         female_borrower = ifelse(derived_sex == "Female", 1, 0), 
+         joint_borrowers = ifelse(derived_sex == "Joint", 1, 0), 
+         property_value = as.numeric(paste(property_value)), 
+         singlefamily = ifelse(derived_dwelling_category == "Single Family (1-4 Units):Site-Built", 1, 0),
+         manufactured = ifelse(derived_dwelling_category == "Single Family (1-4 Units):Manufactured", 1, 0),
+         multifamily = ifelse(derived_dwelling_category == "Multifamily:Site-Built (5+ Units)" | derived_dwelling_category == "Multifamily:Manufactured (5+ Units)" , 1, 0),
+         approved_hispanic = ifelse(derived_ethnicity == "Hispanic or Latino" & approved == 1, 1, 0), 
+         approved_native = ifelse((derived_race == "American Indian or Alaska Native" | derived_race == "Native Hawaiian or Other Pacific Islander") & approved == 1, 1, 0),
+         approved_black = ifelse(derived_race == "Black or African American" & approved == 1, 1, 0), 
+         approved_asian = ifelse(derived_race == "Black or African American" & approved == 1, 1, 0), 
+         approved_white = ifelse(derived_race == "White" & approved == 1, 1, 0), 
+         denied_hispanic = ifelse(derived_ethnicity == "Hispanic or Latino" & denied == 1, 1, 0), 
+         denied_native = ifelse((derived_race == "American Indian or Alaska Native" | derived_race == "Native Hawaiian or Other Pacific Islander") & denied == 1, 1, 0),
+         denied_black = ifelse(derived_race == "Black or African American" & denied == 1, 1, 0), 
+         denied_asian = ifelse(derived_race == "Asian" & denied == 1, 1, 0),
+         denied_white = ifelse(derived_race == "White" & denied == 1, 1, 0), 
+         highcost = ifelse(hoepa_status == 1 & originated == 1, 1, 0), 
+         dti_under30 = ifelse((debt_to_income_ratio == "<20%" | debt_to_income_ratio == "20%-<30%"), 1, 0), 
+         dti_over50 = ifelse((debt_to_income_ratio == "50%-60%" | debt_to_income_ratio == ">60%"), 1, 0),
+         age_25to34 = ifelse(applicant_age == "25-34", 1, 0), 
+         age_35to44 = ifelse(applicant_age == "35-54", 1, 0), 
+         age_55to61 = ifelse(applicant_age == "55-64" & applicant_age_above_62 != "Yes" , 1, 0), 
+         age_over62 = ifelse(applicant_age_above_62 == "Yes", 1, 0), 
+         geoid = as.numeric(paste(census_tract)), 
+         interest_rate = as.numeric(paste(interest_rate)), 
+         interest_rate = ifelse(interest_rate > 12, NA, interest_rate),
+         rate_spread = as.numeric(paste(rate_spread)),
+         rate_spread = ifelse(rate_spread > 12, NA, rate_spread),
+         rate_spread = ifelse(rate_spread < -12, NA, rate_spread),
+         loan_to_value_ratio = as.numeric(paste(loan_to_value_ratio)), 
+         loan_to_value_ratio = ifelse(loan_to_value_ratio > 10, NA, loan_to_value_ratio),
+         loan_costs = as.numeric(paste(total_loan_costs)),
+         outside_msa = ifelse(derived_msa_md == 99999, 1, 0), 
+         down_payment_amount = property_value - loan_amount, 
+         proportion_financed = loan_amount / property_value, 
+         dti_ratio_recode = as.numeric(case_when(
+           debt_to_income_ratio == "<20%" ~ 20, # This turns the dti ratio from a factor into a continuous variable
+           debt_to_income_ratio == ">60%" ~ 60, # They report these weird, so I have to choose single values for ranges
+           debt_to_income_ratio == "20%-<30%" ~ 25,
+           debt_to_income_ratio == "30%-<36%" ~ 33, 
+           debt_to_income_ratio == "36" ~ 36,
+           debt_to_income_ratio == "37" ~ 37,
+           debt_to_income_ratio == "38" ~ 38,
+           debt_to_income_ratio == "39" ~ 39,
+           debt_to_income_ratio == "40" ~ 40,
+           debt_to_income_ratio == "41" ~ 41,
+           debt_to_income_ratio == "42" ~ 42,
+           debt_to_income_ratio == "43" ~ 43,
+           debt_to_income_ratio == "44" ~ 44,
+           debt_to_income_ratio == "45" ~ 45,
+           debt_to_income_ratio == "46" ~ 46,
+           debt_to_income_ratio == "47" ~ 47,
+           debt_to_income_ratio == "48" ~ 48,
+           debt_to_income_ratio == "49" ~ 49,
+           debt_to_income_ratio == "50%-60%" ~ 55))) %>% 
+  left_join(relation_to_usda, by = "geoid")  %>%   
+   mutate(usda_eligable = ifelse(pct_within_usda < .5,    # Loan located in tract that is less than 50% within USDA boundary
+                                 ifelse((income * 1000) < (1.2 * ffiec_msa_md_median_family_income), # Borrower income less than 120% AMI
+                                        ifelse(singlefamily == 1, # Property is single family
+                                               ifelse(dti_ratio_recode <= 41, 1, 0), 0), 0), 0), # DTI ratio less than 41% 
+          guarantee_type = as.factor(ifelse(usda_insured == 1, "USDA Guarantee",
+                                            ifelse(fha_insured == 1 | va_insured == 1, "Other Guarantee", 
+                                                   ifelse(usda_eligable == 1, "USDA Eligable, No Guarantee", NA)))), 
+          loan_category = as.factor(ifelse(usda_insured == 1, "USDA Guarantee",
+                                           ifelse(usda_eligable == 1 & (fha_insured == 1 | va_insured == 1), "USDA Eligable, Other Guarantee", 
+                                                  ifelse(usda_eligable == 1 & usda_insured == 0 & fha_insured == 0, "USDA Eligable, No Guarantee",
+                                                         ifelse(usda_eligable == 0 & (fha_insured == 1 | va_insured == 1), "Not USDA Eligable, Other Guarantee", 
+                                                                ifelse(usda_eligable == 0 & fha_insured == 0 & va_insured == 0, "Not USDA Eligable, No Guarantee", NA)))))))
+
+
+# This code calculates the tract-level lending summary
+tract_hmda_18 <- hmda_18 %>% 
+  select(homepurchase, originated, usda_eligable, geoid, approved, usda_insured, highcost, denied) %>% 
+  filter(homepurchase == 1) %>% 
+  mutate(originated_usda_eligable = ifelse(originated == 1 & usda_eligable == 1, 1, 0)) %>%
+  group_by(geoid) %>% 
+  summarise(applications_tract = n(),
+            approved_tract = sum(approved, na.rm = T), 
+            originated_tract = sum(originated, na.rm = T),
+            originated_eligable_tract = sum(originated_usda_eligable, na.rm = T),
+            usda_tract = sum(usda_insured, na.rm = T), 
+            highcost_tract = sum(highcost, na.rm = T),
+            denied_tract = sum(denied, na.rm = T)) %>%  
+  ungroup() %>%  
+  mutate(pct_approved_tract = approved_tract / applications_tract, 
+         pct_usda_tract = usda_tract / originated_eligable_tract, 
+         pct_highcost_tract = highcost_tract / originated_tract)
+
+
+# This code calculates the state-level lending summary
+state_hmda_18 <- hmda_18 %>% 
+  filter(homepurchase == 1, !is.na(state_code)) %>% 
+  mutate(originated_usda_eligable = ifelse(originated == 1 & usda_eligable == 1, 1, 0)) %>% 
+  group_by(state_code) %>% 
+  summarise(applications_state = n(),
+            applications_usda_eligable_state = sum(usda_eligable, na.rm = T), 
+            approved_state = sum(approved, na.rm = T),
+            originated_state = sum(originated, na.rm = T),
+            originated_eligable_state = sum(originated_usda_eligable, na.rm = T),
+            usda_state = sum(usda_insured, na.rm = T), 
+            highcost_state = sum(highcost, na.rm = T),
+            denied_state = sum(denied, na.rm = T)) %>%  
+  ungroup() %>%  
+  mutate(pct_approved_state = approved_state / applications_state, 
+         pct_usda_state = usda_state / originated_eligable_state, 
+         pct_highcost_state = highcost_state / originated_state)
+
+
+saveRDS(state_hmda_18, file.path(dir, "working data/state_hmda_18.rds"))
+
+
+# This code merges the hmda data with the tract and state summaries. 
+hmda_18_full <- hmda_18 %>% 
+  left_join(tract_hmda_18, by = "geoid") %>% 
+  left_join(state_hmda_18, by = "state_code") %>% 
+  left_join(acs, by = "geoid")
+
+saveRDS(hmda_18_full, file.path(dir, "working data/hmda_18_full.rds"))
+
+
+
+
+
+
+
+
+
+  
+  
